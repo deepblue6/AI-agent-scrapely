@@ -1,0 +1,17 @@
+{
+  "name": "ai-agent-scrapely",
+  "version": "1.0.0",
+  "description": "AI Setter agent for Scrapely — handles webhook replies, generates AI responses, sends follow-ups via Twitter DMs",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "followup": "node src/followupWorker.js"
+  },
+  "dependencies": {
+    "axios": "^1.13.2",
+    "dotenv": "^16.6.1",
+    "https-proxy-agent": "^7.0.6"
+  }
+}
