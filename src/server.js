@@ -27,7 +27,7 @@ dotenv.config({ path: path.join(__dirname, "..", ".env") });
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const PORT = process.env.PORT || 9002;
+const PORT = process.env.PORT || 8080;
 const SCRAPELY_API_BASE = process.env.SCRAPELY_API_BASE || "https://app.scrapely.co/api/v1";
 const SCRAPELY_API_KEY = process.env.SCRAPELY_API_KEY;
 const CALENDAR_LINK = process.env.CALENDAR_LINK || "";
