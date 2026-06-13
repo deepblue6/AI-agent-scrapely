@@ -505,6 +505,14 @@ async function followUpLoop() {
 
         if (conv.crm?.ai_setter_enabled === false) continue;
 
+        // Skip conversations from inactive/banned accounts
+        const accountHandle = conv.account_handle || conv.lead?.account_handle;
+        const accountId = conv.account_id || (accountHandle && handleToAccountId[accountHandle.toLowerCase()]);
+        if (!accountId) {
+          console.log(`[FollowUp] Skipping conversation ${conv.conversation_id} — account "${accountHandle}" is not active`);
+          continue;
+        }
+
         const rawTime = lastMsg.time || 0;
         const lastMsgTime = typeof rawTime === "string" ? new Date(rawTime).getTime() : rawTime;
         const daysSinceLastMsg = (now - lastMsgTime) / (1000 * 60 * 60 * 24);
@@ -541,12 +549,6 @@ async function followUpLoop() {
         const delay = 3000 + Math.floor(Math.random() * 7000);
         await new Promise((r) => setTimeout(r, delay));
 
-        const accountHandle = conv.account_handle || lead.account_handle;
-        const accountId = conv.account_id || fullConversation.account_id || (accountHandle && handleToAccountId[accountHandle.toLowerCase()]);
-        if (!accountId) {
-          console.error(`[FollowUp] No account_id found for conversation ${conv.conversation_id} (handle: ${accountHandle}), skipping`);
-          continue;
-        }
         const sent = await sendDM(conv.conversation_id, accountId, followupMsg);
         if (!sent) continue;
 
