@@ -99,6 +99,26 @@ const FOLLOWUP_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 // ---------------------------------------------------------------------------
 // Scrapely API helpers
 // ---------------------------------------------------------------------------
+async function fetchAccounts() {
+  try {
+    const response = await axios({
+      method: "GET",
+      url: `${SCRAPELY_API_BASE}/accounts`,
+      headers: { "X-API-Key": SCRAPELY_API_KEY },
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    if (response.status < 200 || response.status >= 300) {
+      console.error(`[Scrapely] Fetch accounts error: ${response.status}`);
+      return [];
+    }
+    return response.data?.accounts || [];
+  } catch (err) {
+    console.error(`[Scrapely] Fetch accounts exception: ${err.message}`);
+    return [];
+  }
+}
+
 async function sendDM(conversationId, accountId, message) {
   try {
     console.log(`[Scrapely] Sending DM to conversation ${conversationId}...`);
@@ -468,6 +488,13 @@ async function followUpLoop() {
       return;
     }
 
+    // Build handle → account_id lookup (CRM endpoint doesn't return account_id)
+    const accounts = await fetchAccounts();
+    const handleToAccountId = {};
+    for (const acc of accounts) {
+      if (acc.handle && acc.id) handleToAccountId[acc.handle.toLowerCase()] = acc.id;
+    }
+
     const now = Date.now();
     let followupsSent = 0;
 
@@ -514,14 +541,18 @@ async function followUpLoop() {
         const delay = 3000 + Math.floor(Math.random() * 7000);
         await new Promise((r) => setTimeout(r, delay));
 
-        const accountId = conv.account_id;
+        const accountHandle = conv.account_handle || lead.account_handle;
+        const accountId = conv.account_id || fullConversation.account_id || (accountHandle && handleToAccountId[accountHandle.toLowerCase()]);
+        if (!accountId) {
+          console.error(`[FollowUp] No account_id found for conversation ${conv.conversation_id} (handle: ${accountHandle}), skipping`);
+          continue;
+        }
         const sent = await sendDM(conv.conversation_id, accountId, followupMsg);
         if (!sent) continue;
 
         // Update follow-up count in CRM
         notes.followup_count = followupCount + 1;
         notes.last_followup_at = new Date().toISOString();
-        const accountHandle = conv.account_handle || lead.account_handle;
         if (accountHandle) {
           await updateCRMNotes(conv.conversation_id, accountHandle, notes);
         }
