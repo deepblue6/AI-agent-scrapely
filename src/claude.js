@@ -6,7 +6,7 @@ import axios from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
 
 const RETRY_CONFIG = [
-  { model: "claude-opus-4-6", delay: 0 },
+  { model: "claude-sonnet-4-6", delay: 0 },
   { model: "claude-haiku-4-5-20251001", delay: 2000 },
   { model: "claude-haiku-4-5-20251001", delay: 5000 },
 ];
@@ -66,6 +66,18 @@ export async function callClaude(messages, options = {}) {
       if (response.status < 200 || response.status >= 300) {
         const errorText = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
         console.error(`[Claude] API error (attempt ${attempt + 1}, ${model}): ${response.status} ${errorText}`);
+
+        // Human-readable hints for common errors
+        if (response.status === 401) {
+          console.error(`[Claude] ⚠️  Your ANTHROPIC_API_KEY is invalid or expired. Double-check it at https://console.anthropic.com/settings/keys`);
+        } else if (response.status === 403) {
+          console.error(`[Claude] ⚠️  Your Anthropic account may not have billing enabled. Add a payment method at https://console.anthropic.com/settings/billing`);
+        } else if (response.status === 429) {
+          console.error(`[Claude] ⚠️  Rate limited — too many requests. The agent will retry automatically.`);
+        } else if (response.status === 529) {
+          console.error(`[Claude] ⚠️  Anthropic API is temporarily overloaded. The agent will retry automatically.`);
+        }
+
         if (attempt === RETRY_CONFIG.length - 1) return null;
         continue;
       }

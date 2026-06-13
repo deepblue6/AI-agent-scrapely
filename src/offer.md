@@ -1,37 +1,23 @@
-Scrapely Unlimited Outreach System
+[Your Company Name] — [One-Line Description of Your Offer]
 
-Results with our Twitter Outreach System
-https://x.com/Abdullah_RRD (Public Relations and SEO Firm Founder) - 
-1 qualified lead per 100 DMs sent
+--- REPLACE EVERYTHING BELOW WITH YOUR OWN CONTENT ---
 
-https://x.com/KevinKuang95 (Content Writing Agency Owner) - Closed deal with only 1.5k automated DM sends in his first 14 days
+Results / Social Proof
+- [Client Name or Handle] — [Result they got, e.g. "Closed 3 deals in first 2 weeks"]
+- [Client Name or Handle] — [Result they got]
+- [Testimonial link if you have one]
 
-Testimonial - https://senja.io/p/scrapely/mc/1c083f04-4941-4fb2-b16a-5e54492efae6
-
-Anonymous customer (Email Design and Email Flows For Ecommerce Brands) -
-Closed a 9-figure E-commerce Brand for a $2.5k/m retainer with cold DMs
-
-Average response rate (2.2%) across our most recent 300,000 cold DMs (platform-wide)
-
-Generating 5-7 qualified leads per week for https://x.com/ItsMeBenChan (Content Agency Founder) with 500-750 cold DMs per day
-Generated Notion as a lead (https://x.com/NotionHQ)
-
-What We'll Set Up for You
-We install and configure a fully operational Twitter outbound system capable of sending unlimited DMs to your target audience.
-Setup Includes:
-Twitter Account Configuration - We setup accounts professionally branded to your business
-Software Setup - automated outreach, follow-ups, lead lists, and a dashboard to manage all replies and KPIs
-Onboarding Walkthrough Call - we show you exactly how to run your system
-
-
+What You Offer
+Describe what you do for clients in 2-3 bullet points. Keep it simple.
+- [Bullet 1: What you set up or deliver]
+- [Bullet 2: What makes it different]
+- [Bullet 3: What the outcome looks like]
 
 How It Works
-We onboard you - we setup the accounts, get your first lead list, and start your campaign with you
-You go live within 60 minutes - system sends unlimited personalized DMs automatically each day.
-You handle replies and sales calls - As soon as the first campaign is launched, you have all the SOPs needed to consistently generate leads with this outreach system. You are NOT renting short term results from an agency, you own this.
+1. [Step 1 — e.g. "We hop on a quick call to understand your goals"]
+2. [Step 2 — e.g. "We set everything up within 48 hours"]
+3. [Step 3 — e.g. "You start seeing results within the first week"]
 
+Book a call: [YOUR CALENDAR LINK]
 
-If you want to get your outreach system setup within 60 minutes: https://app.iclosed.io/e/scrapely/setup-call
-
-Scrapely
-Email: jules@scrapely.co | Website: scrapely.co
+Contact: [your email] | [your website]

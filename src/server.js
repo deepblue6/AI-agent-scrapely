@@ -2,7 +2,7 @@
  * AI Setter Webhook Worker
  *
  * Listens for Scrapely webhook events and generates AI replies using Claude.
- * No proposal generation — purely an AI setter that books calls.
+ * An AI setter that books calls.
  *
  * Endpoints:
  *   POST /           — Main webhook receiver (new_reply + reply_back_and_forth)
@@ -30,7 +30,7 @@ dotenv.config({ path: path.join(__dirname, "..", ".env") });
 const PORT = process.env.PORT || 9002;
 const SCRAPELY_API_BASE = process.env.SCRAPELY_API_BASE || "https://app.scrapely.co/api/v1";
 const SCRAPELY_API_KEY = process.env.SCRAPELY_API_KEY;
-const CALENDAR_LINK = process.env.CALENDAR_LINK || "https://app.iclosed.io/e/scrapely/setup-call";
+const CALENDAR_LINK = process.env.CALENDAR_LINK || "";
 
 // Webhook authentication
 const WEBHOOK_SECRETS = new Set(
@@ -40,6 +40,48 @@ const WEBHOOK_SECRETS = new Set(
 // Load SDR instructions + offer from .md files
 const INSTRUCTIONS = fs.readFileSync(path.join(__dirname, "instructions.md"), "utf-8");
 const OFFER = fs.readFileSync(path.join(__dirname, "offer.md"), "utf-8");
+
+// ---------------------------------------------------------------------------
+// Startup checks — catch config mistakes before they cause silent failures
+// ---------------------------------------------------------------------------
+const CONFIG_WARNINGS = [];
+
+if (!process.env.ANTHROPIC_API_KEY) {
+  CONFIG_WARNINGS.push("ANTHROPIC_API_KEY is missing — AI replies will fail. Get one at https://console.anthropic.com/settings/keys");
+}
+if (!SCRAPELY_API_KEY) {
+  CONFIG_WARNINGS.push("SCRAPELY_API_KEY is missing — cannot fetch conversations or send DMs. Find yours in Scrapely Dashboard > Settings > API");
+}
+if (!CALENDAR_LINK) {
+  CONFIG_WARNINGS.push("CALENDAR_LINK is not set — the AI won't have a booking link to share with leads");
+}
+if (WEBHOOK_SECRETS.size === 0) {
+  CONFIG_WARNINGS.push("WEBHOOK_SECRETS is not set — anyone can send fake webhook events to your server. Set it to the X-Webhook-Key value from Scrapely Settings");
+}
+if (OFFER.includes("[Your Company Name]") || OFFER.includes("REPLACE EVERYTHING BELOW")) {
+  CONFIG_WARNINGS.push("src/offer.md still has placeholder text — the AI won't know what to sell. Edit it with your business info");
+}
+if (INSTRUCTIONS.includes("[YOUR PROPOSAL/CASE STUDY LINK]") || INSTRUCTIONS.includes("[YOUR CALENDAR LINK]")) {
+  CONFIG_WARNINGS.push("src/instructions.md still has placeholder links — replace [YOUR CALENDAR LINK] and [YOUR PROPOSAL/CASE STUDY LINK] with your actual URLs");
+}
+
+if (CONFIG_WARNINGS.length > 0) {
+  console.log("\n⚠️  SETUP ISSUES DETECTED:\n");
+  CONFIG_WARNINGS.forEach((w, i) => console.log(`  ${i + 1}. ${w}`));
+  console.log("\n  Fix these in your .env file or in the src/ folder.\n");
+  console.log("  Need help? Open this project in Claude Code and say \"help me set this up\"\n");
+}
+
+if (!process.env.ANTHROPIC_API_KEY || !SCRAPELY_API_KEY) {
+  console.error("❌ Cannot start: ANTHROPIC_API_KEY and SCRAPELY_API_KEY are both required.\n");
+  process.exit(1);
+}
+
+if (WEBHOOK_SECRETS.size === 0) {
+  console.error("❌ Cannot start: WEBHOOK_SECRETS is required for security. Without it, anyone can send fake events to your server.");
+  console.error("   Set it to the X-Webhook-Key value from Scrapely Dashboard > Settings > Global Webhook.\n");
+  process.exit(1);
+}
 
 // Follow-up chain config
 const FOLLOWUP_CHAIN = [
@@ -168,20 +210,6 @@ function parseCRMNotes(conversation) {
   }
 }
 
-const ACCEPTED_PATTERNS = [
-  "you accepted this message request",
-  "je hebt dit berichtverzoek geaccepteerd",
-  "has aceptado esta solicitud de mensaje",
-  "vous avez accepté cette demande de message",
-  "du hast diese nachrichtenanfrage akzeptiert",
-  "accepted this message request",
-];
-
-function isAcceptedMessage(text) {
-  if (!text) return false;
-  const lower = text.trim().toLowerCase();
-  return ACCEPTED_PATTERNS.some((p) => lower.includes(p));
-}
 
 function sanitizeReply(text) {
   if (!text) return text;
@@ -198,7 +226,7 @@ function sanitizeReply(text) {
 // AI Setter: generate reply for back-and-forth conversations
 // ---------------------------------------------------------------------------
 async function generateSetterReply(conversationMessages, leadContext, originalOutboundDm) {
-  const { senderScreenName, senderName, senderDescription, companyName, website, proposalUrl } = leadContext;
+  const { senderScreenName, senderName, senderDescription, companyName, website } = leadContext;
 
   const leadMessages = conversationMessages.filter((m) => !m.isSent).map((m) => m.text);
   const leadTonality = leadMessages.slice(-3).join(" | ");
@@ -221,7 +249,6 @@ Account Offer: ${OFFER}`;
 
   if (companyName) systemPrompt += `\n\nLead's Company: ${companyName}`;
   if (website) systemPrompt += `\nLead's Website: ${website}`;
-  if (proposalUrl) systemPrompt += `\nProposal URL (already sent to lead): ${proposalUrl}`;
   if (originalOutboundDm) systemPrompt += `\n\nYour opening DM to this lead was: "${originalOutboundDm}"`;
   systemPrompt += `\n\nCalendar link (use when pushing for a call): ${CALENDAR_LINK}`;
   systemPrompt += `\n\nRespond with your next message only. No quotes, no explanation, no prefixes. Just the message text.`;
@@ -262,7 +289,7 @@ Account Offer: ${OFFER}`;
 // Follow-up message generation (for stale leads)
 // ---------------------------------------------------------------------------
 async function generateFollowUpMessage(leadContext, followupPrompt, conversationMessages) {
-  const { senderScreenName, senderName, senderDescription, companyName, website, proposalUrl } = leadContext;
+  const { senderScreenName, senderName, senderDescription, companyName, website } = leadContext;
 
   const recentMessages = (conversationMessages || [])
     .slice(-6)
@@ -281,7 +308,6 @@ Lead: @${senderScreenName} — ${senderName}
 Lead Bio: ${senderDescription || "N/A"}
 ${companyName ? `Company: ${companyName}` : ""}
 ${website ? `Website: ${website}` : ""}
-${proposalUrl ? `Proposal URL (already sent): ${proposalUrl}` : ""}
 Calendar link: ${CALENDAR_LINK}
 
 Recent conversation:
@@ -336,7 +362,6 @@ async function processBackAndForth(payload) {
   const crmData = parseCRMNotes(conversation);
   const companyName = crmData?.company_name || null;
   const website = crmData?.website || null;
-  const proposalUrl = crmData?.proposal_url || null;
 
   // Find original outbound DM
   const originalOutbound = conversation.messages.find((m) => m.isSent);
@@ -363,7 +388,7 @@ async function processBackAndForth(payload) {
     senderDescription: lead.bio || payload.lead_description || null,
     companyName,
     website,
-    proposalUrl,
+
   };
 
   // Generate AI reply
@@ -392,7 +417,7 @@ async function processBackAndForth(payload) {
 }
 
 // ---------------------------------------------------------------------------
-// Process first reply (no proposal gen — just AI setter response)
+// Process first reply
 // ---------------------------------------------------------------------------
 async function processFirstReply(payload) {
   const senderScreenName = payload.sender_screen_name;
@@ -416,11 +441,6 @@ async function processFirstReply(payload) {
 async function processMessage(payload) {
   const isBackAndForth = payload.is_back_and_forth || payload.event === "reply_back_and_forth";
   const messageText = payload.message_text || payload.reply_text || "";
-
-  if (isAcceptedMessage(messageText)) {
-    console.log(`[Process] Skipping "message request accepted" from @${payload.sender_screen_name}`);
-    return;
-  }
 
   if (payload.sentiment === "negative") {
     console.log(`[Process] Negative sentiment from @${payload.sender_screen_name}, skipping`);
@@ -478,7 +498,6 @@ async function followUpLoop() {
           senderDescription: lead.bio || null,
           companyName: notes.company_name || null,
           website: notes.website || null,
-          proposalUrl: notes.proposal_url || null,
         };
 
         const fullConversation = await fetchConversation(conv.conversation_id);
@@ -524,17 +543,30 @@ async function followUpLoop() {
 // HTTP Server
 // ---------------------------------------------------------------------------
 const server = http.createServer((req, res) => {
-  // Health check (no auth required)
+  // Health check (no auth required) — shows config status for debugging
   if (req.method === "GET" && req.url === "/health") {
+    const config = {
+      status: CONFIG_WARNINGS.length === 0 ? "ok" : "needs_setup",
+      service: "ai-setter-agent",
+      config: {
+        anthropic_key: process.env.ANTHROPIC_API_KEY ? "set" : "MISSING",
+        scrapely_key: SCRAPELY_API_KEY ? "set" : "MISSING",
+        calendar_link: CALENDAR_LINK ? "set" : "MISSING",
+        webhook_auth: WEBHOOK_SECRETS.size > 0 ? "set" : "MISSING",
+        offer_customized: !OFFER.includes("[Your Company Name]") && !OFFER.includes("REPLACE EVERYTHING BELOW"),
+        instructions_customized: !INSTRUCTIONS.includes("[YOUR PROPOSAL/CASE STUDY LINK]"),
+      },
+      issues: CONFIG_WARNINGS.length > 0 ? CONFIG_WARNINGS : undefined,
+    };
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", service: "ai-setter-agent" }));
+    res.end(JSON.stringify(config, null, 2));
     return;
   }
 
-  // Webhook auth
-  if (WEBHOOK_SECRETS.size > 0 && !WEBHOOK_SECRETS.has(req.headers["x-webhook-key"])) {
+  // Webhook auth — every request (except /health) must have a valid X-Webhook-Key
+  if (!WEBHOOK_SECRETS.has(req.headers["x-webhook-key"])) {
     res.writeHead(403, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Forbidden" }));
+    res.end(JSON.stringify({ error: "Forbidden — invalid or missing X-Webhook-Key header" }));
     return;
   }
 
@@ -568,7 +600,6 @@ const server = http.createServer((req, res) => {
           senderDescription: lead.bio || null,
           companyName: crmData?.company_name || null,
           website: crmData?.website || null,
-          proposalUrl: crmData?.proposal_url || null,
         };
 
         const reply = await generateSetterReply(
@@ -598,6 +629,22 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: err.message }));
       }
     })();
+    return;
+  }
+
+  // Root GET — friendly landing page for people visiting in a browser
+  if (req.method === "GET" && (req.url === "/" || req.url === "")) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      service: "ai-setter-agent",
+      status: CONFIG_WARNINGS.length === 0 ? "running" : "needs_setup",
+      hint: "This is a webhook server. Scrapely sends POST requests here. Visit /health to check your config.",
+      endpoints: {
+        health: "/health",
+        test: "/test?conversation_id=YOUR_CONVERSATION_ID",
+        webhook: "POST /",
+      },
+    }, null, 2));
     return;
   }
 
@@ -634,12 +681,23 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`\nAI Setter Agent listening on port ${PORT}`);
+  console.log(`\n✅ AI Setter Agent listening on port ${PORT}`);
   console.log(`  Health:  http://localhost:${PORT}/health`);
   console.log(`  Test:    http://localhost:${PORT}/test?conversation_id=XXX`);
   console.log(`  Webhook: POST http://localhost:${PORT}/`);
   console.log(`  Follow-up chain: ${FOLLOWUP_CHAIN.map((f, i) => `#${i + 1} after ${f.delayDays}d`).join(", ")}`);
-  console.log(`  Ready to receive Scrapely webhook events\n`);
+
+  if (CONFIG_WARNINGS.length === 0) {
+    console.log(`\n  ✅ All config checks passed — ready to receive Scrapely webhook events\n`);
+  } else {
+    console.log(`\n  ⚠️  Server started with ${CONFIG_WARNINGS.length} config warning(s) — check /health for details\n`);
+  }
+
+  console.log(`  📋 NEXT STEPS (if deploying to Railway):`);
+  console.log(`     1. Enable Public Networking in Railway (Settings > Networking > Generate Domain)`);
+  console.log(`     2. Copy your public URL and add it as a webhook in Scrapely Settings`);
+  console.log(`     3. Copy the X-Webhook-Key from Scrapely and add it as WEBHOOK_SECRETS in Railway Variables`);
+  console.log(`     4. Visit your-url.com/health to verify everything is configured\n`);
 
   // Start follow-up loop
   followUpLoop().catch((err) => console.error(`[FollowUp] Initial run error: ${err.message}`));
