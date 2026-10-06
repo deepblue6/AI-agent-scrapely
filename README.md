@@ -92,7 +92,7 @@ Visit `https://your-app.up.railway.app/health` — you should see:
 
 If anything shows `"MISSING"` or `false`, fix that variable or file and Railway will redeploy automatically.
 
-That's it — your AI setter is live. When leads reply to your Scrapely DMs, the agent will auto-respond within seconds.
+That's it — your AI setter is live. When leads reply to your Scrapely DMs, the agent will auto-respond within a couple of minutes.
 
 ## Configuration Reference
 
@@ -127,7 +127,9 @@ After deploying, visit `/health` in your browser to verify everything is configu
 
 - Skips negative sentiment replies (won't engage angry leads)
 - Won't send more than 3 messages in a row without a response
-- Adds a human-like delay (5-15 seconds) before each reply
+- Waits 45-90s for the lead to finish typing, then sends one reply to the whole burst (duplicate webhooks are ignored)
+- Never replies to the same message twice, and stays quiet if someone on your team already answered
+- Re-checks the thread right before sending and throws the draft away if the lead said something new
 - Respects `ai_setter_enabled: false` flag in Scrapely CRM
 - Strips emojis and formatting from AI output
 

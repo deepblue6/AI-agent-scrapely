@@ -96,6 +96,11 @@ const FOLLOWUP_CHAIN = [
 ];
 const FOLLOWUP_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
+// Leads often send 2-3 messages in a row, and Scrapely can fire the same webhook
+// twice. Wait for the burst to settle, then reply once to all of it.
+const DEBOUNCE_MIN_MS = 45 * 1000;
+const DEBOUNCE_MAX_MS = 90 * 1000;
+
 // ---------------------------------------------------------------------------
 // Scrapely API helpers
 // ---------------------------------------------------------------------------
@@ -231,6 +236,14 @@ function parseCRMNotes(conversation) {
 }
 
 
+// A bare emoji reaction shows up as a lead message like "❤️ reacted"
+const isReaction = (msg) => /^\S{1,8} reacted$/.test((msg?.text || "").trim());
+
+// Messages carry no id; lead messages have `timestamp`, ours have `time`
+function messageKey(msg) {
+  return msg ? `${msg.timestamp || msg.time || ""}|${msg.text || ""}` : null;
+}
+
 function sanitizeReply(text) {
   if (!text) return text;
   return text
@@ -350,24 +363,63 @@ Respond with your follow-up message only. No quotes, no explanation, no prefixes
 }
 
 // ---------------------------------------------------------------------------
-// Process back-and-forth reply
+// Process a conversation (debounced, one run at a time per conversation)
 // ---------------------------------------------------------------------------
-async function processBackAndForth(payload) {
-  const senderScreenName = payload.sender_screen_name;
-  const senderName = payload.lead_name || senderScreenName || "there";
-  const conversationId = payload.conversation_id;
-  const accountId = payload.account_id;
-  const accountHandle = payload.account_twitter_handle;
+const lastRepliedTo = new Map(); // conversationId -> key of the last lead message we answered
+const pending = new Map(); // conversationId -> { timer, payload, running, rerun }
 
-  if (!conversationId || !accountId) {
+function scheduleConversation(payload) {
+  const conversationId = payload.conversation_id;
+  if (!conversationId || !payload.account_id) {
     console.error(`[Process] Missing conversation_id or account_id, skipping`);
     return;
   }
 
+  const entry = pending.get(conversationId) || {};
+  // new_reply carries sentiment + lead fields, later events may not, so merge
+  entry.payload = { ...entry.payload, ...Object.fromEntries(Object.entries(payload).filter(([, v]) => v != null)) };
+  pending.set(conversationId, entry);
+
+  if (entry.running) {
+    entry.rerun = true;
+    return;
+  }
+  clearTimeout(entry.timer);
+  const delay = DEBOUNCE_MIN_MS + Math.floor(Math.random() * (DEBOUNCE_MAX_MS - DEBOUNCE_MIN_MS));
+  console.log(`[Process] @${payload.sender_screen_name} queued, replying in ~${Math.round(delay / 1000)}s unless they keep typing`);
+  entry.timer = setTimeout(() => runConversation(conversationId), delay);
+}
+
+async function runConversation(conversationId) {
+  const entry = pending.get(conversationId);
+  if (!entry) return;
+  entry.running = true;
+  entry.timer = null;
+  try {
+    await processConversation(entry.payload);
+  } catch (err) {
+    console.error(`[Process] Error for ${conversationId}: ${err.message}`);
+  }
+  entry.running = false;
+  if (entry.rerun) {
+    entry.rerun = false;
+    scheduleConversation(entry.payload);
+  } else {
+    pending.delete(conversationId);
+  }
+}
+
+async function processConversation(payload) {
+  const senderScreenName = payload.sender_screen_name;
+  const conversationId = payload.conversation_id;
+  const accountId = payload.account_id;
+  const accountHandle = payload.account_twitter_handle;
+
   console.log(`[Process] Reply from @${senderScreenName}, fetching conversation...`);
 
   const conversation = await fetchConversation(conversationId);
-  if (!conversation || !conversation.messages || conversation.messages.length === 0) {
+  const messages = conversation?.messages;
+  if (!messages?.length) {
     console.error(`[Process] Failed to fetch conversation ${conversationId}`);
     return;
   }
@@ -378,41 +430,49 @@ async function processBackAndForth(payload) {
     return;
   }
 
+  // Someone (us or a human on the team) already answered the latest lead message
+  const lastMessage = messages[messages.length - 1];
+  if (lastMessage.isSent) {
+    console.log(`[Process] Last message to @${senderScreenName} is already ours, skipping`);
+    return;
+  }
+  if (lastRepliedTo.get(conversationId) === messageKey(lastMessage)) {
+    console.log(`[Process] Already answered this message from @${senderScreenName}, skipping`);
+    return;
+  }
+
+  // A bare reaction after we've already been talking doesn't need an answer
+  let lastSentIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].isSent) { lastSentIndex = i; break; }
+  }
+  const newLeadMessages = messages.slice(lastSentIndex + 1);
+  const isFirstResponse = messages.filter((m) => !m.isSent).length === newLeadMessages.length;
+  if (!isFirstResponse && newLeadMessages.every(isReaction)) {
+    console.log(`[Process] Only a reaction from @${senderScreenName}, not replying`);
+    return;
+  }
+
   // Parse CRM notes for stored context
   const crmData = parseCRMNotes(conversation);
   const companyName = crmData?.company_name || null;
   const website = crmData?.website || null;
 
   // Find original outbound DM
-  const originalOutbound = conversation.messages.find((m) => m.isSent);
-  const originalOutboundDm = originalOutbound?.text || null;
-
-  // Check if we've sent 3+ messages in a row without a response
-  const messages = conversation.messages;
-  let consecutiveSent = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (i === messages.length - 1 && !messages[i].isSent) continue;
-    if (messages[i].isSent) consecutiveSent++;
-    else break;
-  }
-  if (consecutiveSent >= 3) {
-    console.log(`[Process] Already sent 3+ messages in a row, not responding to @${senderScreenName}`);
-    return;
-  }
+  const originalOutboundDm = messages.find((m) => m.isSent)?.text || null;
 
   // Build lead context
   const lead = conversation.lead || {};
   const leadContext = {
     senderScreenName: lead.screen_name || senderScreenName,
-    senderName: lead.name || senderName,
+    senderName: lead.name || payload.lead_name || senderScreenName,
     senderDescription: lead.bio || payload.lead_description || null,
     companyName,
     website,
-
   };
 
   // Generate AI reply
-  const reply = await generateSetterReply(conversation.messages, leadContext, originalOutboundDm);
+  const reply = await generateSetterReply(messages, leadContext, originalOutboundDm);
   if (!reply) {
     console.log(`[Process] No reply generated for @${senderScreenName}`);
     return;
@@ -422,6 +482,16 @@ async function processBackAndForth(payload) {
   const delay = 5000 + Math.floor(Math.random() * 10000);
   console.log(`[Process] Waiting ${Math.round(delay / 1000)}s before replying...`);
   await new Promise((r) => setTimeout(r, delay));
+
+  // The lead may have kept typing (or a human may have replied) while we were generating
+  const latest = await fetchConversation(conversationId);
+  const latestLast = latest?.messages?.[latest.messages.length - 1];
+  if (latestLast && messageKey(latestLast) !== messageKey(lastMessage)) {
+    console.log(`[Process] Conversation with @${senderScreenName} changed while generating, discarding draft`);
+    return;
+  }
+
+  lastRepliedTo.set(conversationId, messageKey(lastMessage));
 
   // Send the reply
   await sendDM(conversationId, accountId, reply);
@@ -437,42 +507,14 @@ async function processBackAndForth(payload) {
 }
 
 // ---------------------------------------------------------------------------
-// Process first reply
-// ---------------------------------------------------------------------------
-async function processFirstReply(payload) {
-  const senderScreenName = payload.sender_screen_name;
-  const conversationId = payload.conversation_id;
-  const accountId = payload.account_id;
-
-  if (!conversationId || !accountId) {
-    console.error(`[Process] Missing conversation_id or account_id, skipping`);
-    return;
-  }
-
-  console.log(`[Process] First reply from @${senderScreenName}, handling as setter...`);
-
-  // Treat it the same as a back-and-forth — fetch conversation and respond
-  await processBackAndForth(payload);
-}
-
-// ---------------------------------------------------------------------------
 // Route webhook events
 // ---------------------------------------------------------------------------
-async function processMessage(payload) {
-  const isBackAndForth = payload.is_back_and_forth || payload.event === "reply_back_and_forth";
-  const messageText = payload.message_text || payload.reply_text || "";
-
+function processMessage(payload) {
   if (payload.sentiment === "negative") {
     console.log(`[Process] Negative sentiment from @${payload.sender_screen_name}, skipping`);
     return;
   }
-
-  if (!isBackAndForth) {
-    await processFirstReply(payload);
-    return;
-  }
-
-  await processBackAndForth(payload);
+  scheduleConversation(payload);
 }
 
 // ---------------------------------------------------------------------------
@@ -521,6 +563,7 @@ async function followUpLoop() {
         const followupCount = notes.followup_count || 0;
 
         if (followupCount >= FOLLOWUP_CHAIN.length) continue;
+        if (pending.has(conv.conversation_id)) continue;
 
         const nextFollowup = FOLLOWUP_CHAIN[followupCount];
         if (daysSinceLastMsg < nextFollowup.delayDays) continue;
@@ -537,6 +580,8 @@ async function followUpLoop() {
 
         const fullConversation = await fetchConversation(conv.conversation_id);
         if (!fullConversation?.messages) continue;
+        // The CRM listing can lag behind, make sure the lead hasn't answered since
+        if (!fullConversation.messages[fullConversation.messages.length - 1]?.isSent) continue;
 
         const followupMsg = await generateFollowUpMessage(
           leadContext,
@@ -704,9 +749,7 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      processMessage(payload).catch((err) => {
-        console.error(`[Webhook] Processing error: ${err.message}`);
-      });
+      processMessage(payload);
     } catch (err) {
       console.error(`[Webhook] JSON parse error: ${err.message}`);
     }

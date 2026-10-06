@@ -137,7 +137,9 @@ The order matters because they need the Railway URL first (to put in Scrapely), 
 - The server is plain Node.js (no Express). It uses the built-in `http` module.
 - Claude API calls are in `src/claude.js` with automatic retry (tries Opus first, falls back to Haiku).
 - Follow-up timing is controlled by `FOLLOWUP_CHAIN` in `src/server.js` — default is day 2 and day 7.
-- The agent adds a 5-15 second random delay before replying to seem human.
+- The agent waits 45-90 seconds after a lead message (the timer resets if they keep typing), so bursts of messages and duplicate webhooks get one reply.
+- It never answers the same lead message twice, skips threads where we (or a human on the team) spoke last, and ignores a bare emoji reaction mid-conversation.
+- Right before sending it reloads the thread and discards the draft if anything changed.
 - It won't send more than 3 messages in a row without a lead response.
 - All secrets come from environment variables. Nothing is hardcoded.
 
